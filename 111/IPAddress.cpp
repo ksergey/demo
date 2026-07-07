@@ -9,38 +9,64 @@
 #include <sys/ioctl.h>
 #include <sys/types.h>
 
-#include <algorithm>
-
 #include "ScopeExit.h"
 
 namespace forge::utils {
 
+auto IPv4Address::toString() const -> std::string {
+    char buf[INET_ADDRSTRLEN];
+    ::inet_ntop(AF_INET, &addr_, buf, sizeof(buf));
+    return std::string{buf};
+}
+
 auto IPv4Address::fromString(std::string_view str) noexcept -> std::expected<IPv4Address, std::error_code> {
-    in_addr addr;
-    if (::inet_pton(AF_INET, std::string{str}.c_str(), &addr) != 1) {
-        return std::unexpected(makePosixErrorCode(EINVAL));
+    ::in_addr addr{};
+    if (auto const rc = ::inet_pton(AF_INET, std::string{str}.c_str(), &addr); rc != 1) {
+        if (rc == 0) {
+            return std::unexpected(makePosixErrorCode(EINVAL));
+        } else {
+            return std::unexpected(makePosixErrorCode(errno));
+        }
     }
     return IPv4Address{addr};
 }
 
-auto IPv4Address::toString() const -> std::string {
-    char buf[INET_ADDRSTRLEN] = "";
-    ::inet_ntop(AF_INET, &addr_.native, buf, INET_ADDRSTRLEN);
+auto IPv6Address::toString() const -> std::string {
+    char buf[INET6_ADDRSTRLEN];
+    ::inet_ntop(AF_INET6, &addr_, buf, sizeof(buf));
     return std::string{buf};
 }
 
-auto fromString(std::string_view str) noexcept -> std::expected<IPv6Address, std::error_code> {
-    in6_addr addr;
-    if (::inet_pton(AF_INET6, std::string{str}.c_str(), &addr) != 1) {
-        return std::unexpected(makePosixErrorCode(EINVAL));
+auto IPv6Address::fromString(std::string_view str) noexcept -> std::expected<IPv6Address, std::error_code> {
+    ::in6_addr addr{};
+    if (auto const rc = ::inet_pton(AF_INET6, std::string{str}.c_str(), &addr); rc != 1) {
+        if (rc == 0) {
+            return std::unexpected(makePosixErrorCode(EINVAL));
+        } else {
+            return std::unexpected(makePosixErrorCode(errno));
+        }
     }
     return IPv6Address{addr};
 }
 
-auto IPv6Address::toString() const -> std::string {
-    char buf[INET6_ADDRSTRLEN] = "";
-    ::inet_ntop(AF_INET6, &addr_.native, buf, INET6_ADDRSTRLEN);
-    return std::string(buf);
+auto IPAddress::toString() const -> std::string {
+    if (auto const address = std::get_if<IPv4Address>(&storage_); address) {
+        return address->toString();
+    }
+    if (auto const address = std::get_if<IPv6Address>(&storage_); address) {
+        return address->toString();
+    }
+    return std::string{};
+}
+
+auto IPAddress::fromString(std::string_view str) noexcept -> std::expected<IPAddress, std::error_code> {
+    if (auto const rc = IPv4Address::fromString(str); rc) {
+        return rc.value();
+    }
+    if (auto const rc = IPv6Address::fromString(str); rc) {
+        return rc.value();
+    }
+    return std::unexpected(makePosixErrorCode(EINVAL));
 }
 
 auto getInterfaceAddresses(std::vector<InterfaceInfo>& storage) noexcept -> std::expected<void, std::error_code> {
@@ -75,3 +101,27 @@ auto getInterfaceAddresses(std::vector<InterfaceInfo>& storage) noexcept -> std:
 }
 
 } // namespace forge::utils
+
+auto fmt::formatter<forge::utils::IPv4Address>::format(forge::utils::IPv4Address const& ip, format_context& ctx) const -> format_context::iterator {
+    auto const addr = ip.native();
+    char buf[INET_ADDRSTRLEN];
+    ::inet_ntop(AF_INET, &addr, buf, sizeof(buf));
+    return fmt::formatter<std::string_view>::format(buf, ctx);
+}
+
+auto fmt::formatter<forge::utils::IPv6Address>::format(forge::utils::IPv6Address const& ip, format_context& ctx) const -> format_context::iterator {
+    auto const addr = ip.native();
+    char buf[INET6_ADDRSTRLEN];
+    ::inet_ntop(AF_INET6, &addr, buf, sizeof(buf));
+    return fmt::formatter<std::string_view>::format(buf, ctx);
+}
+
+auto fmt::formatter<forge::utils::IPAddress>::format(forge::utils::IPAddress const& ip, format_context& ctx) const -> format_context::iterator {
+    if (auto const addr = ip.toIPv4(); addr) {
+        return fmt::formatter<forge::utils::IPv4Address>{}.format(*addr, ctx);
+    }
+    if (auto const addr = ip.toIPv6(); addr) {
+        return fmt::formatter<forge::utils::IPv6Address>{}.format(*addr, ctx);
+    }
+    return format_to(ctx.out(), "<unknown>");
+}
